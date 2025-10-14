@@ -1,22 +1,21 @@
+"""
+"""
+
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-from textblob import TextBlob
-from googleapiclient.discovery import build
 from datetime import datetime
-import numpy as np
 import re
+from textblob import TextBlob
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+from googleapiclient.discovery import build
+from streamlit_echarts import st_echarts
 
 # ------------------------------
-# CONFIGURATION
+# CONFIG
 # ------------------------------
 st.set_page_config(page_title="YouTube Content Analyzer", layout="wide")
-
-st.title("📊 YouTube Content Analyzer — Dashboard")
-
-api_key = st.secrets["api_key"]  # ensure your Streamlit Cloud has this secret
-youtube = build("youtube", "v3", developerKey=api_key)
+st.title("📊 YouTube Content Analyzer")
 
 # ------------------------------
 # HELPER FUNCTIONS
@@ -33,7 +32,8 @@ def get_video_id(url):
         return url.split("youtu.be/")[1].split("?")[0]
     return None
 
-def fetch_video_details(video_id):
+def fetch_video_details(video_id, api_key):
+    youtube = build("youtube", "v3", developerKey=api_key)
     req = youtube.videos().list(part="snippet,statistics", id=video_id)
     res = req.execute()
     if not res["items"]:
@@ -48,7 +48,8 @@ def fetch_video_details(video_id):
         "comments": int(item["statistics"].get("commentCount", 0))
     }
 
-def fetch_comments(video_id):
+def fetch_comments(video_id, api_key):
+    youtube = build("youtube", "v3", developerKey=api_key)
     comments = []
     next_page_token = None
     while True:
@@ -73,8 +74,9 @@ def fetch_comments(video_id):
     return pd.DataFrame(comments)
 
 # ------------------------------
-# MAIN UI
+# MAIN APP
 # ------------------------------
+api_key = st.secrets["api_key"]
 url = st.text_input("Enter YouTube video URL:")
 
 if url:
@@ -83,10 +85,13 @@ if url:
         st.error("⚠️ Invalid YouTube URL")
     else:
         st.info("Fetching video details and comments...")
-        details = fetch_video_details(video_id)
-        df = fetch_comments(video_id)
+        details = fetch_video_details(video_id, api_key)
+        df = fetch_comments(video_id, api_key)
 
         if details and not df.empty:
+            # ------------------------------
+            # VIDEO METRICS
+            # ------------------------------
             st.subheader("🎥 Video Summary")
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -104,28 +109,36 @@ if url:
             st.write(f"**Published on:** {details['published'][:10]}")
 
             # ------------------------------
-            # COMMENT ANALYSIS
+            # COMMENT CLEANING & SENTIMENT
             # ------------------------------
             df["Cleaned_Text"] = df["Text"].apply(clean_text)
             df["Polarity"] = df["Cleaned_Text"].apply(lambda x: TextBlob(x).sentiment.polarity)
-            df["Sentiment"] = df["Polarity"].apply(lambda x: "Positive" if x > 0.2 else ("Negative" if x < -0.2 else "Neutral"))
+            df["Sentiment"] = df["Polarity"].apply(
+                lambda x: "Positive" if x > 0.2 else ("Negative" if x < -0.2 else "Neutral")
+            )
             df["PublishedAt"] = pd.to_datetime(df["PublishedAt"])
 
-            # Download option
+            # ------------------------------
+            # DOWNLOAD CSV
+            # ------------------------------
             csv = df.to_csv(index=False)
             st.download_button("⬇️ Download Comments CSV", csv, "youtube_comments.csv", "text/csv")
 
             # ------------------------------
-            # COMMENT ACTIVITY OVER TIME
+            # COMMENT ACTIVITY OVER MONTHS
             # ------------------------------
-            st.subheader("📈 Comment Activity Over Time")
-            time_data = df.groupby(df["PublishedAt"].dt.date).size()
-            fig, ax = plt.subplots()
-            ax.plot(time_data.index, time_data.values, marker='o')
-            ax.set_xlabel("Date")
-            ax.set_ylabel("Number of Comments")
-            ax.set_title("Comment Frequency Over Time")
-            st.pyplot(fig)
+            st.subheader("📈 Comment Activity Over Time (Monthly)")
+            df["MonthYear"] = df["PublishedAt"].dt.to_period("M")
+            monthly_activity = df.groupby("MonthYear").size().reset_index(name="Count")
+            monthly_activity["MonthYearStr"] = monthly_activity["MonthYear"].astype(str)
+
+            options_month = {
+                "tooltip": {"trigger": "axis"},
+                "xAxis": {"type": "category", "data": monthly_activity["MonthYearStr"].tolist()},
+                "yAxis": {"type": "value"},
+                "series": [{"data": monthly_activity["Count"].tolist(), "type": "line", "smooth": True}],
+            }
+            st_echarts(options=options_month, height="400px")
 
             # ------------------------------
             # WORD CLOUD
@@ -150,21 +163,40 @@ if url:
                 st.markdown("**Top Positive Comments:** 🌞")
                 for _, row in pos_comments.iterrows():
                     st.write(f"👉 {row['Text']}  \n❤️ Likes: {row['Likes']}")
-
             with col2:
                 st.markdown("**Top Negative Comments:** ⚡")
                 for _, row in neg_comments.iterrows():
                     st.write(f"👎 {row['Text']}  \n💔 Likes: {row['Likes']}")
 
             # ------------------------------
-            # SENTIMENT DISTRIBUTION
+            # INTERACTIVE SENTIMENT PIE CHART
             # ------------------------------
-            st.subheader("📊 Sentiment Distribution")
+            st.subheader("📊 Sentiment Distribution (Interactive)")
             sentiment_counts = df["Sentiment"].value_counts()
-            fig2, ax2 = plt.subplots()
-            ax2.pie(sentiment_counts, labels=sentiment_counts.index, autopct="%1.1f%%", startangle=90)
-            ax2.set_title("Overall Sentiment Breakdown")
-            st.pyplot(fig2)
+            data_list = [
+                {"value": int(sentiment_counts.get("Positive", 0)), "name": "Positive"},
+                {"value": int(sentiment_counts.get("Neutral", 0)), "name": "Neutral"},
+                {"value": int(sentiment_counts.get("Negative", 0)), "name": "Negative"},
+            ]
+
+            options = {
+                "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
+                "legend": {"top": "5%", "left": "center"},
+                "series": [
+                    {
+                        "name": "Sentiment",
+                        "type": "pie",
+                        "radius": ["40%", "70%"],
+                        "avoidLabelOverlap": False,
+                        "itemStyle": {"borderRadius": 10, "borderColor": "#fff", "borderWidth": 2},
+                        "emphasis": {"label": {"show": True, "fontSize": 20, "fontWeight": "bold"}},
+                        "label": {"show": False},
+                        "labelLine": {"show": False},
+                        "data": data_list,
+                    }
+                ],
+            }
+            st_echarts(options=options, height="400px")
 
         else:
             st.warning("No comments found or video details unavailable.")
