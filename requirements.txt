@@ -18,3 +18,4 @@ streamlit-aggrid==1.1.8.post1
 streamlit-echarts==0.4.0
 matplotlib
 wordcloud
+vaderSentiment
