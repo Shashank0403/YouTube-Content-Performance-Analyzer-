@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import re
-from textblob import TextBlob
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from googleapiclient.discovery import build
@@ -20,10 +20,25 @@ st.title("📊 YouTube Content Analyzer")
 # ------------------------------
 # HELPER FUNCTIONS
 # ------------------------------
+analyzer = SentimentIntensityAnalyzer()
+
 def clean_text(text):
     text = re.sub(r"http\S+|www\S+", "", text)  # remove URLs
-    text = re.sub(r"[^A-Za-z0-9\s]", "", text)  # remove punctuation
+    text = re.sub(r"[^A-Za-z0-9\s❤️‍🔥]", "", text)  # remove punctuation but keep hearts/fire
     return text.strip().lower()
+
+def get_vader_sentiment(text):
+    """
+    Returns sentiment label based on VADER compound score.
+    Positive, Neutral, Negative
+    """
+    score = analyzer.polarity_scores(text)["compound"]
+    if score >= 0.05:
+        return "Positive"
+    elif score <= -0.05:
+        return "Negative"
+    else:
+        return "Neutral"
 
 def get_video_id(url):
     if "v=" in url:
@@ -112,10 +127,7 @@ if url:
             # COMMENT CLEANING & SENTIMENT
             # ------------------------------
             df["Cleaned_Text"] = df["Text"].apply(clean_text)
-            df["Polarity"] = df["Cleaned_Text"].apply(lambda x: TextBlob(x).sentiment.polarity)
-            df["Sentiment"] = df["Polarity"].apply(
-                lambda x: "Positive" if x > 0.2 else ("Negative" if x < -0.2 else "Neutral")
-            )
+            df["Sentiment"] = df["Cleaned_Text"].apply(get_vader_sentiment)
             df["PublishedAt"] = pd.to_datetime(df["PublishedAt"])
 
             # ------------------------------
@@ -155,8 +167,8 @@ if url:
             # TOP POSITIVE & NEGATIVE COMMENTS
             # ------------------------------
             st.subheader("💬 Sentiment Highlights")
-            pos_comments = df[df["Polarity"] > 0.5].sort_values("Likes", ascending=False).head(5)
-            neg_comments = df[df["Polarity"] < -0.5].sort_values("Likes", ascending=False).head(5)
+            pos_comments = df[df["Sentiment"] == "Positive"].sort_values("Likes", ascending=False).head(5)
+            neg_comments = df[df["Sentiment"] == "Negative"].sort_values("Likes", ascending=False).head(5)
 
             col1, col2 = st.columns(2)
             with col1:
