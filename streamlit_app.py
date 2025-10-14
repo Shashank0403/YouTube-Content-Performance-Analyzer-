@@ -73,7 +73,8 @@ def fetch_comments(video_id, api_key):
             break
     df_comments = pd.DataFrame(comments)
     if not df_comments.empty:
-        df_comments["PublishedAt"] = pd.to_datetime(df_comments["PublishedAt"])
+        df_comments["PublishedAt"] = pd.to_datetime(df_comments["PublishedAt"], errors='coerce')
+        df_comments = df_comments.dropna(subset=["PublishedAt"])
     return df_comments
 
 # ------------------------------
@@ -132,6 +133,7 @@ if url:
             st.subheader("📈 Comment Activity Over the Last 6 Months")
             six_months_ago = pd.Timestamp.now() - pd.DateOffset(months=6)
             df_last6 = df[df["PublishedAt"] >= six_months_ago]
+
             if not df_last6.empty:
                 df_last6["MonthYear"] = df_last6["PublishedAt"].dt.to_period("M")
                 monthly_activity = df_last6.groupby("MonthYear").size().reset_index(name="Count")
