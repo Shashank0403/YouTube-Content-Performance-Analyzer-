@@ -1,270 +1,170 @@
-"""
-Enhanced UI version of the YouTube Content Performance Analyzer
-"""
-
-import json
 import streamlit as st
-from streamlit_echarts import st_echarts
-from millify import millify
-from st_aggrid import AgGrid
-from st_aggrid.grid_options_builder import GridOptionsBuilder
-from transform import (
-    parse_video,
-    youtube_metrics,
-    get_video_published_date,
-    get_delta_str,
-)
 import pandas as pd
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from textblob import TextBlob
+from googleapiclient.discovery import build
+from datetime import datetime
+import numpy as np
+import re
 
-# --------------------- PAGE CONFIG ---------------------
-st.set_page_config(
-    page_title="YouTube Content Analyzer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ------------------------------
+# CONFIGURATION
+# ------------------------------
+st.set_page_config(page_title="YouTube Content Analyzer", layout="wide")
 
-# --------------------- CUSTOM CSS ---------------------
-st.markdown(
-    """
-    <style>
-    /* General App Styling */
-    [data-testid="stAppViewContainer"] {
-        background: linear-gradient(135deg, #f9fafc 0%, #eef2f7 100%);
+st.title("📊 YouTube Content Analyzer — Dashboard")
+
+api_key = st.secrets["api_key"]  # ensure your Streamlit Cloud has this secret
+youtube = build("youtube", "v3", developerKey=api_key)
+
+# ------------------------------
+# HELPER FUNCTIONS
+# ------------------------------
+def clean_text(text):
+    text = re.sub(r"http\S+|www\S+", "", text)  # remove URLs
+    text = re.sub(r"[^A-Za-z0-9\s]", "", text)  # remove punctuation
+    return text.strip().lower()
+
+def get_video_id(url):
+    if "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0]
+    return None
+
+def fetch_video_details(video_id):
+    req = youtube.videos().list(part="snippet,statistics", id=video_id)
+    res = req.execute()
+    if not res["items"]:
+        return None
+    item = res["items"][0]
+    return {
+        "title": item["snippet"]["title"],
+        "channel": item["snippet"]["channelTitle"],
+        "published": item["snippet"]["publishedAt"],
+        "views": int(item["statistics"].get("viewCount", 0)),
+        "likes": int(item["statistics"].get("likeCount", 0)),
+        "comments": int(item["statistics"].get("commentCount", 0))
     }
-    [data-testid="stHeader"] {
-        background: rgba(255,255,255,0.5);
-    }
-    h1, h2, h3 {
-        font-family: 'Poppins', sans-serif;
-    }
-    .stMetric {
-        background-color: white !important;
-        border-radius: 15px;
-        padding: 15px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-        text-align: center;
-    }
-    .metric-container {
-        background: white;
-        border-radius: 12px;
-        padding: 10px 20px;
-        box-shadow: 0 1px 6px rgba(0,0,0,0.08);
-    }
-    .stSubheader {
-        color: #2e3b4e;
-    }
-    .section {
-        background: #ffffff;
-        border-radius: 15px;
-        padding: 25px;
-        margin-bottom: 25px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
-# --------------------- TITLE ---------------------
-st.markdown(
-    "<h1 style='text-align:center; color:#e63946;'>📊 YouTube Content Performance Analyzer</h1>",
-    unsafe_allow_html=True,
-)
+def fetch_comments(video_id):
+    comments = []
+    next_page_token = None
+    while True:
+        req = youtube.commentThreads().list(
+            part="snippet",
+            videoId=video_id,
+            maxResults=100,
+            pageToken=next_page_token
+        )
+        res = req.execute()
+        for item in res["items"]:
+            snippet = item["snippet"]["topLevelComment"]["snippet"]
+            comments.append({
+                "Author": snippet["authorDisplayName"],
+                "Text": snippet["textDisplay"],
+                "Likes": snippet["likeCount"],
+                "PublishedAt": snippet["publishedAt"]
+            })
+        next_page_token = res.get("nextPageToken")
+        if not next_page_token:
+            break
+    return pd.DataFrame(comments)
 
-st.markdown(
-    "<p style='text-align:center; color:#555;'>Analyze YouTube video performance, engagement metrics, and sentiment insights in one dashboard.</p>",
-    unsafe_allow_html=True,
-)
+# ------------------------------
+# MAIN UI
+# ------------------------------
+url = st.text_input("Enter YouTube video URL:")
 
-st.markdown("---")
+if url:
+    video_id = get_video_id(url)
+    if not video_id:
+        st.error("⚠️ Invalid YouTube URL")
+    else:
+        st.info("Fetching video details and comments...")
+        details = fetch_video_details(video_id)
+        df = fetch_comments(video_id)
 
-# --------------------- INPUT ---------------------
-with st.container():
-    st.markdown("### 🔗 Enter a YouTube Video URL")
-    VIDEO_URL = st.text_input(
-        "Paste the YouTube video URL below:",
-        placeholder="https://www.youtube.com/watch?v=example",
-        label_visibility="collapsed",
-    )
+        if details and not df.empty:
+            st.subheader("🎥 Video Summary")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Views", f"{details['views']:,}")
+            with col2:
+                st.metric("Likes", f"{details['likes']:,}")
+            with col3:
+                st.metric("Comments", f"{details['comments']:,}")
+            with col4:
+                engagement = round((details["likes"] + details["comments"]) / details["views"] * 100, 2)
+                st.metric("Engagement Rate", f"{engagement}%")
 
-# --------------------- MAIN CONTENT ---------------------
-try:
-    if VIDEO_URL:
-        with st.spinner("🔍 Analyzing video data... Please wait..."):
-            df = parse_video(VIDEO_URL)
-            df_metrics = youtube_metrics(VIDEO_URL)
+            st.write(f"**Title:** {details['title']}")
+            st.write(f"**Channel:** {details['channel']}")
+            st.write(f"**Published on:** {details['published'][:10]}")
 
-            # ---------- Metrics Section ----------
-            with st.container():
-                st.markdown("## 📈 Key Metrics")
-                st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Views", millify(df_metrics[0], precision=2))
-                col2.metric("Likes", millify(df_metrics[1], precision=2))
-                col3.metric("Comments", millify(df_metrics[2], precision=2))
-                st.markdown("</div>", unsafe_allow_html=True)
+            # ------------------------------
+            # COMMENT ANALYSIS
+            # ------------------------------
+            df["Cleaned_Text"] = df["Text"].apply(clean_text)
+            df["Polarity"] = df["Cleaned_Text"].apply(lambda x: TextBlob(x).sentiment.polarity)
+            df["Sentiment"] = df["Polarity"].apply(lambda x: "Positive" if x > 0.2 else ("Negative" if x < -0.2 else "Neutral"))
+            df["PublishedAt"] = pd.to_datetime(df["PublishedAt"])
 
-            st.markdown("---")
+            # Download option
+            csv = df.to_csv(index=False)
+            st.download_button("⬇️ Download Comments CSV", csv, "youtube_comments.csv", "text/csv")
 
-            # ---------- Video Preview ----------
-            st.subheader("🎥 Video Preview")
-            st.video(VIDEO_URL)
+            # ------------------------------
+            # COMMENT ACTIVITY OVER TIME
+            # ------------------------------
+            st.subheader("📈 Comment Activity Over Time")
+            time_data = df.groupby(df["PublishedAt"].dt.date).size()
+            fig, ax = plt.subplots()
+            ax.plot(time_data.index, time_data.values, marker='o')
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Number of Comments")
+            ax.set_title("Comment Frequency Over Time")
+            st.pyplot(fig)
 
-            # ---------- Published Info ----------
-            @st.fragment
-            def tz_choice_section():
-                df_published_date = get_video_published_date(VIDEO_URL)
-                delta_str = get_delta_str(df_published_date)
-                title = df_published_date.get("Title", "")
-                creator = df_published_date.get("Creator", "")
+            # ------------------------------
+            # WORD CLOUD
+            # ------------------------------
+            st.subheader("☁️ Word Cloud of Most Frequent Words")
+            all_text = " ".join(df["Cleaned_Text"])
+            wordcloud = WordCloud(width=800, height=400, background_color="white").generate(all_text)
+            fig_wc, ax_wc = plt.subplots(figsize=(10, 5))
+            ax_wc.imshow(wordcloud, interpolation='bilinear')
+            ax_wc.axis("off")
+            st.pyplot(fig_wc)
 
-                with st.container():
-                    st.markdown("## 🕒 Video Details")
-                    st.markdown("<div class='section'>", unsafe_allow_html=True)
-                    if title:
-                        st.markdown(f"### {title}")
-                    if creator:
-                        st.markdown(f"**Creator:** {creator}")
+            # ------------------------------
+            # TOP POSITIVE & NEGATIVE COMMENTS
+            # ------------------------------
+            st.subheader("💬 Sentiment Highlights")
+            pos_comments = df[df["Polarity"] > 0.5].sort_values("Likes", ascending=False).head(5)
+            neg_comments = df[df["Polarity"] < -0.5].sort_values("Likes", ascending=False).head(5)
 
-                    tz_choice = st.segmented_control(
-                        "Published",
-                        label_visibility="hidden",
-                        options=["UTC", "EST", "IST"],
-                        default="UTC",
-                        selection_mode="single",
-                    )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Top Positive Comments:** 🌞")
+                for _, row in pos_comments.iterrows():
+                    st.write(f"👉 {row['Text']}  \n❤️ Likes: {row['Likes']}")
 
-                    st.metric(
-                        f"Published ({tz_choice})",
-                        df_published_date[tz_choice],
-                        delta=delta_str,
-                    )
-                    st.markdown("</div>", unsafe_allow_html=True)
+            with col2:
+                st.markdown("**Top Negative Comments:** ⚡")
+                for _, row in neg_comments.iterrows():
+                    st.write(f"👎 {row['Text']}  \n💔 Likes: {row['Likes']}")
 
-            tz_choice_section()
+            # ------------------------------
+            # SENTIMENT DISTRIBUTION
+            # ------------------------------
+            st.subheader("📊 Sentiment Distribution")
+            sentiment_counts = df["Sentiment"].value_counts()
+            fig2, ax2 = plt.subplots()
+            ax2.pie(sentiment_counts, labels=sentiment_counts.index, autopct="%1.1f%%", startangle=90)
+            ax2.set_title("Overall Sentiment Breakdown")
+            st.pyplot(fig2)
 
-            # ---------- Top Comments ----------
-            with st.container():
-                st.markdown("## 💬 Most Liked Comments")
-                df_top = (
-                    df[["Author", "Comment", "Timestamp", "Likes"]]
-                    .sort_values("Likes", ascending=False)
-                    .reset_index(drop=True)
-                )
-                top_11 = df_top.head(11)
-                gd1 = GridOptionsBuilder.from_dataframe(top_11)
-                gd1.configure_auto_height(True)
-                gridoptions1 = gd1.build()
-
-                AgGrid(
-                    top_11,
-                    gridOptions=gridoptions1,
-                    key="top_comments",
-                    theme="streamlit",
-                    update_on="MANUAL",
-                )
-
-            # ---------- Languages ----------
-            with st.container():
-                st.markdown("## 🌍 Languages Used")
-                df_langs = (
-                    df["Language"]
-                    .value_counts()
-                    .rename_axis("Language")
-                    .reset_index(name="count")
-                )
-
-                options2 = {
-                    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-                    "yAxis": {"type": "category", "data": df_langs["Language"].tolist()},
-                    "xAxis": {"type": "value"},
-                    "series": [{"data": df_langs["count"].tolist(), "type": "bar"}],
-                    "color": ["#3b82f6"],
-                }
-                st_echarts(options=options2, height="450px")
-
-            # ---------- Most Replied Comments ----------
-            with st.container():
-                st.markdown("## 🔁 Most Replied Comments")
-                df_replies = (
-                    df[["Author", "Comment", "Timestamp", "TotalReplies"]]
-                    .sort_values("TotalReplies", ascending=False)
-                    .reset_index(drop=True)
-                )
-                gd2 = GridOptionsBuilder.from_dataframe(df_replies.head(11))
-                gd2.configure_auto_height(True)
-                gridoptions2 = gd2.build()
-                AgGrid(
-                    df_replies.head(11),
-                    gridOptions=gridoptions2,
-                    key="top_replies",
-                    theme="streamlit",
-                    update_on="MANUAL",
-                )
-
-            # ---------- Sentiment Analysis ----------
-            with st.container():
-                st.markdown("## ❤️ Comment Sentiment Analysis")
-                sentiments = df[df["Language"] == "English"]
-                data_sentiments = (
-                    sentiments["TextBlob_Sentiment_Type"]
-                    .value_counts()
-                    .rename_axis("Sentiment")
-                    .reset_index(name="counts")
-                )
-
-                data_sentiments["Review_percent"] = (
-                    100.0 * data_sentiments["counts"] / data_sentiments["counts"].sum()
-                ).round(1)
-
-                if "No sentiment data" in data_sentiments["Sentiment"].values:
-                    data_list = [
-                        {
-                            "value": int(data_sentiments["counts"].iloc[0]),
-                            "name": "No sentiment data",
-                        }
-                    ]
-                else:
-                    percent_map = {
-                        row["Sentiment"]: float(row["Review_percent"])
-                        for _, row in data_sentiments.iterrows()
-                    }
-                    data_list = [
-                        {"value": percent_map.get("NEUTRAL", 0.0), "name": "NEUTRAL"},
-                        {"value": percent_map.get("POSITIVE", 0.0), "name": "POSITIVE"},
-                        {"value": percent_map.get("NEGATIVE", 0.0), "name": "NEGATIVE"},
-                    ]
-
-                options = {
-                    "tooltip": {"trigger": "item", "formatter": "{d}%"},
-                    "legend": {"top": "5%", "left": "center"},
-                    "series": [
-                        {
-                            "name": "Sentiment",
-                            "type": "pie",
-                            "radius": ["40%", "70%"],
-                            "avoidLabelOverlap": False,
-                            "itemStyle": {
-                                "borderRadius": 10,
-                                "borderColor": "#fff",
-                                "borderWidth": 2,
-                            },
-                            "label": {"show": False, "position": "center"},
-                            "emphasis": {
-                                "label": {
-                                    "show": True,
-                                    "fontSize": "30",
-                                    "fontWeight": "bold",
-                                }
-                            },
-                            "labelLine": {"show": False},
-                            "data": data_list,
-                        }
-                    ],
-                    "color": ["#f87171", "#34d399", "#60a5fa"],
-                }
-                st_echarts(options=options, height="450px")
-
-except Exception as e:
-    st.error(e, icon="🚨")
+        else:
+            st.warning("No comments found or video details unavailable.")
