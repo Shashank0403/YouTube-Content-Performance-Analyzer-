@@ -130,24 +130,38 @@ if url:
             # ------------------------------
             # COMMENT ACTIVITY OVER LAST 6 MONTHS
             # ------------------------------
-            st.subheader("📈 Comment Activity Over the Last 6 Months")
-            six_months_ago = pd.Timestamp.now() - pd.DateOffset(months=6)
-            df_last6 = df[df["PublishedAt"] >= six_months_ago]
+            # ------------------------------
+# COMMENT ACTIVITY OVER LAST 6 MONTHS
+# ------------------------------
+st.subheader("📈 Comment Activity Over the Last 6 Months")
 
-            if not df_last6.empty:
-                df_last6["MonthYear"] = df_last6["PublishedAt"].dt.to_period("M")
-                monthly_activity = df_last6.groupby("MonthYear").size().reset_index(name="Count")
-                monthly_activity["MonthYearStr"] = monthly_activity["MonthYear"].astype(str)
+# Ensure PublishedAt is datetime
+df["PublishedAt"] = pd.to_datetime(df["PublishedAt"], errors="coerce")
 
-                options_month = {
-                    "tooltip": {"trigger": "axis"},
-                    "xAxis": {"type": "category", "data": monthly_activity["MonthYearStr"].tolist()},
-                    "yAxis": {"type": "value"},
-                    "series": [{"data": monthly_activity["Count"].tolist(), "type": "line", "smooth": True}],
-                }
-                st_echarts(options=options_month, height="400px")
-            else:
-                st.info("No comments in the last 6 months.")
+# Drop rows where conversion failed
+df_valid = df.dropna(subset=["PublishedAt"]).copy()
+
+# Filter last 6 months
+six_months_ago = pd.Timestamp.now() - pd.DateOffset(months=6)
+df_last6 = df_valid[df_valid["PublishedAt"] >= six_months_ago]
+
+if not df_last6.empty:
+    # Group by Month-Year
+    df_last6["MonthYear"] = df_last6["PublishedAt"].dt.to_period("M")
+    monthly_activity = df_last6.groupby("MonthYear").size().reset_index(name="Count")
+    monthly_activity["MonthYearStr"] = monthly_activity["MonthYear"].astype(str)
+
+    # ECharts line chart
+    options_month = {
+        "tooltip": {"trigger": "axis"},
+        "xAxis": {"type": "category", "data": monthly_activity["MonthYearStr"].tolist()},
+        "yAxis": {"type": "value"},
+        "series": [{"data": monthly_activity["Count"].tolist(), "type": "line", "smooth": True}],
+    }
+    st_echarts(options=options_month, height="400px")
+else:
+    st.info("No comments in the last 6 months.")
+
 
             # ------------------------------
             # WORD CLOUD
