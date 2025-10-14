@@ -3,8 +3,8 @@
 
 import streamlit as st
 import pandas as pd
-import re
 from datetime import datetime
+import re
 from textblob import TextBlob
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
@@ -71,11 +71,7 @@ def fetch_comments(video_id, api_key):
         next_page_token = res.get("nextPageToken")
         if not next_page_token:
             break
-    df_comments = pd.DataFrame(comments)
-    if not df_comments.empty:
-        df_comments["PublishedAt"] = pd.to_datetime(df_comments["PublishedAt"], errors='coerce')
-        df_comments = df_comments.dropna(subset=["PublishedAt"])
-    return df_comments
+    return pd.DataFrame(comments)
 
 # ------------------------------
 # MAIN APP
@@ -120,6 +116,7 @@ if url:
             df["Sentiment"] = df["Polarity"].apply(
                 lambda x: "Positive" if x > 0.2 else ("Negative" if x < -0.2 else "Neutral")
             )
+            df["PublishedAt"] = pd.to_datetime(df["PublishedAt"])
 
             # ------------------------------
             # DOWNLOAD CSV
@@ -128,40 +125,20 @@ if url:
             st.download_button("⬇️ Download Comments CSV", csv, "youtube_comments.csv", "text/csv")
 
             # ------------------------------
-            # COMMENT ACTIVITY OVER LAST 6 MONTHS
+            # COMMENT ACTIVITY OVER MONTHS
             # ------------------------------
-            # ------------------------------
-# COMMENT ACTIVITY OVER LAST 6 MONTHS
-# ------------------------------
-st.subheader("📈 Comment Activity Over the Last 6 Months")
+            st.subheader("📈 Comment Activity Over Time (Monthly)")
+            df["MonthYear"] = df["PublishedAt"].dt.to_period("M")
+            monthly_activity = df.groupby("MonthYear").size().reset_index(name="Count")
+            monthly_activity["MonthYearStr"] = monthly_activity["MonthYear"].astype(str)
 
-# Ensure PublishedAt is datetime
-df["PublishedAt"] = pd.to_datetime(df["PublishedAt"], errors="coerce")
-
-# Drop rows where conversion failed
-df_valid = df.dropna(subset=["PublishedAt"]).copy()
-
-# Filter last 6 months
-six_months_ago = pd.Timestamp.now() - pd.DateOffset(months=6)
-df_last6 = df_valid[df_valid["PublishedAt"] >= six_months_ago]
-
-if not df_last6.empty:
-    # Group by Month-Year
-    df_last6["MonthYear"] = df_last6["PublishedAt"].dt.to_period("M")
-    monthly_activity = df_last6.groupby("MonthYear").size().reset_index(name="Count")
-    monthly_activity["MonthYearStr"] = monthly_activity["MonthYear"].astype(str)
-
-    # ECharts line chart
-    options_month = {
-        "tooltip": {"trigger": "axis"},
-        "xAxis": {"type": "category", "data": monthly_activity["MonthYearStr"].tolist()},
-        "yAxis": {"type": "value"},
-        "series": [{"data": monthly_activity["Count"].tolist(), "type": "line", "smooth": True}],
-    }
-    st_echarts(options=options_month, height="400px")
-else:
-    st.info("No comments in the last 6 months.")
-
+            options_month = {
+                "tooltip": {"trigger": "axis"},
+                "xAxis": {"type": "category", "data": monthly_activity["MonthYearStr"].tolist()},
+                "yAxis": {"type": "value"},
+                "series": [{"data": monthly_activity["Count"].tolist(), "type": "line", "smooth": True}],
+            }
+            st_echarts(options=options_month, height="400px")
 
             # ------------------------------
             # WORD CLOUD
@@ -178,24 +155,18 @@ else:
             # TOP POSITIVE & NEGATIVE COMMENTS
             # ------------------------------
             st.subheader("💬 Sentiment Highlights")
-            top_positive = df[df["Polarity"] > 0.5].sort_values("Likes", ascending=False).head(5)
-            top_negative = df[df["Polarity"] < -0.5].sort_values("Likes", ascending=False).head(5)
+            pos_comments = df[df["Polarity"] > 0.5].sort_values("Likes", ascending=False).head(5)
+            neg_comments = df[df["Polarity"] < -0.5].sort_values("Likes", ascending=False).head(5)
 
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**Top Positive Comments:** 🌞")
-                if not top_positive.empty:
-                    for _, row in top_positive.iterrows():
-                        st.write(f"👉 {row['Text']}  \n❤️ Likes: {row['Likes']}")
-                else:
-                    st.write("No strongly positive comments found.")
+                for _, row in pos_comments.iterrows():
+                    st.write(f"👉 {row['Text']}  \n❤️ Likes: {row['Likes']}")
             with col2:
                 st.markdown("**Top Negative Comments:** ⚡")
-                if not top_negative.empty:
-                    for _, row in top_negative.iterrows():
-                        st.write(f"👎 {row['Text']}  \n💔 Likes: {row['Likes']}")
-                else:
-                    st.write("No strongly negative comments found.")
+                for _, row in neg_comments.iterrows():
+                    st.write(f"👎 {row['Text']}  \n💔 Likes: {row['Likes']}")
 
             # ------------------------------
             # INTERACTIVE SENTIMENT PIE CHART
@@ -208,7 +179,7 @@ else:
                 {"value": int(sentiment_counts.get("Negative", 0)), "name": "Negative"},
             ]
 
-            options_pie = {
+            options = {
                 "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
                 "legend": {"top": "5%", "left": "center"},
                 "series": [
@@ -225,7 +196,7 @@ else:
                     }
                 ],
             }
-            st_echarts(options=options_pie, height="400px")
+            st_echarts(options=options, height="400px")
 
         else:
             st.warning("No comments found or video details unavailable.")
